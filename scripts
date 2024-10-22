@@ -5,3 +5,630 @@ git commit -m "first commit"
 git branch -M main
 git remote add origin https://github.com/DidiRen-ZhaoWanglab/snMultiome_data_quality_assessment.git
 git push -u origin main
+
+library(Signac)
+library(Seurat)
+library(BSgenome.Mmusculus.UCSC.mm10)
+library(EnsDb.Mmusculus.v79)
+library(tidyverse)
+library(gridExtra)
+library(multtest)
+library(metap)
+library(dplyr)
+
+#input RNA and ATAC data from cell ranger aggr
+counts <- Read10X_h5("path to/filtered_feature_bc_matrix.h5")
+fragpath <- "path to/atac_fragments.tsv.gz"
+
+annotation <- GetGRangesFromEnsDb(ensdb = EnsDb.Mmusculus.v79)
+seqlevels(annotation) <- paste0('chr', seqlevels(annotation))
+
+# create a Seurat object containing the RNA data
+prot <- CreateSeuratObject(
+  counts = counts$`Gene Expression`,
+  assay = "RNA",
+  names.field = 2, names.delim = "-"
+)
+
+# create ATAC assay and add it to the object
+prot[["ATAC"]] <- CreateChromatinAssay(
+  counts = counts$Peaks,
+  sep = c(":", "-"),
+  fragments = fragpath,
+  annotation = annotation
+)
+
+#calculating nucleosomesignal and TSSEnrichment score
+DefaultAssay(prot) <- "ATAC"
+prot <- NucleosomeSignal(prot)
+prot <- TSSEnrichment(prot)
+
+#create a sample column
+prot$sample <- rownames(prot@meta.data)
+view(prot@meta.data)
+
+#split sample column
+prot@meta.data <- separate(prot@meta.data, col = "sample", into = c("barcode","samplecode"), sep = "-")
+view(prot@meta.data)
+unique(prot@meta.data$group)
+#rename group names
+Idents(prot) <- "samplecode"
+prot <- RenameIdents(prot,"1"="DFGC-1", "2"="DFGC-2", "3"="DFGC-3","4"="Beads-1","5"="Beads-2", "6"="Beads-3", "7"="FACS-1","8"="FACS-2", "9"="FACS-3")
+prot$sample <- Idents(prot)
+prot@meta.data <- separate(prot@meta.data, col = "sample", into = c("group","sample_number"), sep = "-")
+view(prot@meta.data)
+save(prot, file = "prot.RData")
+
+#quality of library 
+p1 <- VlnPlot(
+  object = prot,
+  features = c("nCount_RNA", "nCount_ATAC", "TSS.enrichment", "nucleosome_signal"),
+  ncol = 4,
+  pt.size = 0,
+)
+#quality by group
+p1 <- VlnPlot(
+  object = prot,
+  features = c("nCount_RNA", "nCount_ATAC", "TSS.enrichment", "nucleosome_signal"),
+  ncol = 4,
+  pt.size = 0,
+  group.by = "group"
+)
+
+#quality by designed order
+prot$group <- factor(x = prot$group, levels = c("DFGC","Beads", "FACS"))
+Idents(prot) <- "group"
+
+p1 <- VlnPlot(
+  object = prot,
+  features = c("nCount_RNA", "nCount_ATAC", "TSS.enrichment", "nucleosome_signal"),
+  ncol = 4,
+  pt.size = 0,
+  group.by = "group")
+
+
+
+#filtering the extreme value and visualize QC
+median.stat <- function(x){
+  out <- quantile(x, probs = c(0.5))
+  names(out) <- c("ymed")
+  return(out) 
+}
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="nCount_RNA", pt.size = 0, y.max = 10000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="nCount_RNA", pt.size = 0, y.max = 10000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="nFeature_RNA", pt.size = 0, y.max = 5000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="nFeature_RNA", pt.size = 0, y.max = 5000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="nCount_ATAC", pt.size = 0, y.max = 10000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="nCount_ATAC", pt.size = 0, y.max = 10000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="nFeature_ATAC", pt.size = 0, y.max = 8000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="nFeature_ATAC", pt.size = 0, y.max = 8000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="TSS.enrichment", pt.size = 0, y.max = 20) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="TSS.enrichment", pt.size = 0, y.max = 20) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="TSS.percentile", pt.size = 0, y.max = 1) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="TSS.percentile", pt.size = 0, y.max = 1) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="nucleosome_signal", pt.size = 0, y.max = 1) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="nucleosome_signal", pt.size = 0, y.max = 1) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="nucleosome_percentile", pt.size = 0, y.max = 1) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="nucleosome_percentile", pt.size = 0, y.max = 1) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+#obtain mt data
+DefaultAssay(prot) <- "RNA"
+prot[["percent.mt"]] <- PercentageFeatureSet(prot, pattern = "^mt-")
+prot_subset_renameIdent[["percent.mt"]] <- PercentageFeatureSet(prot_subset_renameIdent, pattern = "^mt-")
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="percent.mt", pt.size = 0, y.max = 1) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="percent.mt", pt.size = 0, y.max = 1) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+DefaultAssay(prot) <- "ATAC"
+#obtain peaks and SCT assays in all data prot
+peaks <- CallPeaks(prot)
+# remove peaks on nonstandard chromosomes and in genomic blacklist regions
+peaks <- keepStandardChromosomes(peaks, pruning.mode = "coarse")
+peaks <- subsetByOverlaps(x = peaks, ranges = blacklist_mm10, invert = TRUE)
+macs2_counts <- FeatureMatrix(
+  fragments = Fragments(prot),
+  features = peaks,
+  cells = colnames(prot)
+)
+prot[["peaks"]] <- CreateChromatinAssay(
+  counts = macs2_counts,
+  fragments = fragpath,
+  annotation = annotation
+)
+
+#Run normalization with RNA data 
+DefaultAssay(prot) <- "RNA"
+prot <- SCTransform(prot)
+prot <- RunPCA(prot)
+DefaultAssay(prot) <- "peaks"
+prot <- FindTopFeatures(prot, min.cutoff = 30)
+prot <- RunTFIDF(prot)
+prot <- RunSVD(prot)
+
+
+prot <- FindMultiModalNeighbors(
+  object = prot,
+  reduction.list = list("pca", "lsi"), 
+  dims.list = list(1:50, 2:40),
+  modality.weight.name = "RNA.weight",
+  verbose = TRUE
+)
+
+# build a joint UMAP visualization
+prot <- RunUMAP(
+  object = prot,
+  nn.name = "weighted.nn",
+  assay = "RNA",
+  verbose = TRUE
+)
+
+#Visulize the data quality by ATAC calling peaks
+DefaultAssay(prot) <-"peaks"
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="nCount_peaks", pt.size = 0, y.max = 6000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="nCount_peaks", pt.size = 0, y.max = 6000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="nFeature_peaks", pt.size = 0, y.max = 6000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="nFeature_peaks", pt.size = 0, y.max = 6000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+
+#Visulize the data quality by normalized RNA data
+DefaultAssay(prot) <-"SCT"
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="nCount_SCT", pt.size = 0, y.max = 4000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="nCount_SCT", pt.size = 0, y.max = 4000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+Idents(prot) <- "group"
+p1 <- VlnPlot(object = prot, features ="nFeature_SCT", pt.size = 0, y.max = 4000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+Idents(prot) <- "methods"
+p1 <- VlnPlot(object = prot, features ="nFeature_SCT", pt.size = 0, y.max = 4000) +
+  stat_summary(fun.y = median.stat, geom='point', size = 5, colour = "black") 
+
+
+#subset to remove low quality cells
+prot_subset <- subset(
+  x = prot,
+  subset = nCount_ATAC < 150000 &
+    nCount_RNA < 100000 &
+    nCount_ATAC > 1000 &
+    nCount_RNA > 1000 &
+    nucleosome_signal < 2 &
+    TSS.enrichment > 2
+)
+
+
+#now process doublets using doubletfinder
+library(DoubletFinder)
+library(patchwork)
+DefaultAssay(prot_subset) <- "RNA"
+prot_subset <- NormalizeData(prot_subset) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA(dims = 1:20) %>% FindNeighbors() %>% FindClusters() %>% RunUMAP(dims = 1:20, reduction.name = 'umap.rna', reduction.key = 'rnaUMAP_')
+
+#pK Identification (no ground-truth)
+sweep.res.list<- paramSweep(prot_subset, PCs= 1:20, sct = FALSE)
+sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)
+bcmvn <- find.pK(sweep.stats)
+bcmvn.max <- bcmvn[which.max(bcmvn$BCmetric),]
+optimal.pk <- bcmvn.max$pK
+optimal.pk <- as.numeric(levels(optimal.pk))[optimal.pk]
+
+## Homotypic Doublet Proportion Estimate
+
+annotations <- prot_subset@meta.data$ClusteringResults
+homotypic.prop <- modelHomotypic(annotations)
+nExp_poi <- round(0.076*nrow(prot_subset@meta.data))
+nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+
+#run doubletFinder
+prot_subset <- doubletFinder(prot_subset, PCs = 1:20, pN = 0.25, pK = optimal.pk, nExp = nExp_poi.adj, reuse.pANN = FALSE, sct = FALSE)
+view(prot_subset@meta.data)
+#visualize doublets
+p1 <- DimPlot(prot_subset,  group.by = "DF.classifications_0.25_0.005_4655", repel = TRUE, raster = FALSE) + ggtitle("Doublet proportion")
+
+#number of singlets and doublets
+table(prot_subset@meta.data$DF.classifications_0.25_0.005_4655)
+prot_subset <- subset(x = prot_subset, subset= DF.classifications_0.25_0.005_4655 == "Singlet" )
+
+#doublet proportion by sample
+Idents(prot_subset) <- prot_subset$methods
+pt <- table(Idents(prot_subset), prot_subset$DF.classifications_0.25_0.005_4655)
+pt <- as.data.frame(pt)
+row_sub = apply(pt, 1, function(row) all(row !=0 ))
+pt[row_sub,]
+pt$Var1 <- as.character(pt$Var1)
+pt$Var1 <- factor(pt$Var1, levels=unique(pt$Var1))
+
+level_order <- c("DFGC-1", "DFGC-2", "DFGC-3","Beads-1","Beads-2", "Beads-3", "FACS-1","FACS-2", "FACS-3")
+p1 <- ggplot(pt, aes(x=factor(Var1, levels = level_order), y=Freq, fill=Var2)) +
+  theme_bw(base_size = 15) + theme(aspect.ratio = 1/3) +
+  geom_col(position = "fill", width = 0.5) +
+  xlab("Sample") +
+  ylab("Proportion")+ ggtitle("Doublet proportion")
+
+
+#doublet proportion by group
+Idents(prot_subset) <- prot_subset$group
+pt <- table(Idents(prot_subset), prot_subset$DF.classifications_0.25_0.005_4655)
+pt <- as.data.frame(pt)
+row_sub = apply(pt, 1, function(row) all(row !=0 ))
+pt[row_sub,]
+pt$Var1 <- as.character(pt$Var1)
+pt$Var1 <- factor(pt$Var1, levels=unique(pt$Var1))
+
+level_order <- c("DFGC", "Beads", "FACS")
+p1 <- ggplot(pt, aes(x=factor(Var1, levels = level_order), y=Freq, fill=Var2)) +
+  theme_bw(base_size = 15) + theme(aspect.ratio = 1/1) +
+  geom_col(position = "fill", width = 0.5) +
+  xlab("Sample") +
+  ylab("Proportion")+ ggtitle("Doublet proportion")
+
+
+
+#RNA layer analysis of subset
+DefaultAssay(prot_subset) <- "RNA"
+prot_subset <- SCTransform(prot_subset)
+prot_subset <- RunPCA(prot_subset)
+DefaultAssay(prot_subset) <- "peaks"
+prot_subset <- FindTopFeatures(prot_subset, min.cutoff = 30)
+prot_subset <- RunTFIDF(prot_subset)
+prot_subset <- RunSVD(prot_subset)
+
+
+prot_subset <- FindMultiModalNeighbors(
+  object = prot_subset,
+  reduction.list = list("pca", "lsi"), 
+  dims.list = list(1:50, 2:40),
+  modality.weight.name = "RNA.weight",
+  verbose = TRUE
+)
+
+# build a joint UMAP visualization
+prot_subset <- RunUMAP(
+  object = prot_subset,
+  nn.name = "weighted.nn",
+  assay = "RNA",
+  verbose = TRUE
+)
+
+#visualize the dimplot
+DefaultAssay(prot_subset) <- "RNA"
+p1 <- DimPlot(prot_subset,  shuffle = T, label = FALSE, repel = TRUE, raster = FALSE, reduction = "pca")+ ggtitle("PCA")
+
+p1<- DimPlot(prot_subset,  shuffle = T, label = FALSE, repel = TRUE, raster = FALSE, reduction = "umap")+ ggtitle("UMAP")
+
+p1 <-DimPlot(prot_subset,  shuffle = T, label = FALSE, repel = TRUE, raster = FALSE, reduction = "lsi")+ ggtitle("LSI")
+
+Idents(prot_subset) <- "group"
+p1 <- DimPlot(prot_subset,  shuffle = T, label = FALSE, repel = TRUE, raster = FALSE, reduction = "pca")+ ggtitle("PCA")
+
+p1 <- DimPlot(prot_subset,  shuffle = T, label = FALSE, repel = TRUE, raster = FALSE, reduction = "umap")+ ggtitle("UMAP")
+
+p1 <- DimPlot(prot_subset,  shuffle = T, label = FALSE, repel = TRUE, raster = FALSE, reduction = "lsi")+ ggtitle("LSI")
+
+
+#WNN analysis to combind RNA and ATAC data together
+prot_subset <- prot_subset
+
+DefaultAssay(prot_subset) <- "RNA"
+prot_subset <- SCTransform(prot_subset, verbose = FALSE) %>% RunPCA() %>% RunUMAP(dims = 1:50, reduction.name = 'umap.rna', reduction.key = 'rnaUMAP_')
+
+# ATAC analysis
+# We exclude the first dimension as this is typically correlated with sequencing depth
+DefaultAssay(prot_subset) <- "ATAC"
+prot_subset <- RunTFIDF(prot_subset)
+prot_subset <- FindTopFeatures(prot_subset, min.cutoff = 'q0')
+prot_subset <- RunSVD(prot_subset)
+prot_subset <- RunUMAP(prot_subset, reduction = 'lsi', dims = 2:50, reduction.name = "umap.atac", reduction.key = "atacUMAP_")
+prot_subset <- FindMultiModalNeighbors(prot_subset, reduction.list = list("pca", "lsi"), dims.list = list(1:50, 2:50))
+prot_subset <- RunUMAP(prot_subset, nn.name = "weighted.nn", reduction.name = "wnn.umap", reduction.key = "wnnUMAP_")
+prot_subset <- FindClusters(prot_subset, graph.name = "wsnn", algorithm = 3, verbose = FALSE)
+
+p1 <- DimPlot(prot_subset, reduction = "umap.rna", group.by = "group", label = FALSE, label.size = 2.5, repel = TRUE, raster = FALSE ) + ggtitle("RNA")
+p1 <- DimPlot(prot_subset, reduction = "umap.rna", group.by = "methods", label = FALSE, label.size = 2.5, repel = TRUE, raster = FALSE) + ggtitle("RNA")
+
+p1 <- DimPlot(prot_subset, reduction = "umap.atac", group.by = "group", label = FALSE, label.size = 2.5, repel = TRUE, raster = FALSE) + ggtitle("ATAC")
+p1 <- DimPlot(prot_subset, reduction = "umap.atac", group.by = "methods", label = FALSE, label.size = 2.5, repel = TRUE, raster = FALSE) + ggtitle("ATAC")
+
+p1 <- DimPlot(prot_subset, reduction = "wnn.umap", group.by = "group", label = FALSE, label.size = 2.5, repel = TRUE, raster = FALSE) + ggtitle("WNN")
+p1 <- DimPlot(prot_subset, reduction = "wnn.umap", group.by = "methods", label = FALSE, label.size = 2.5, repel = TRUE, raster = FALSE) + ggtitle("WNN")
+
+#bydefault cluster view
+p1 <- DimPlot(prot_subset, reduction = "wnn.umap",label = FALSE, label.size = 2.5, repel = TRUE, raster = FALSE) + ggtitle("WNN")
+
+
+
+#cell type identification
+
+Idents(prot_subset) <- prot_subset$seurat_clusters
+view(prot_subset@meta.data)
+dmarkers <- c("Actn2","Tnnt2", "Ryr2","Pecam1", "Tie1","Vegfc","Col1a1","Col1a2", "Dcn", "Cd68" , "C1qa", "C1qb", "Pdgfrb", "Rgs5", "Kcnj8", "Msln", "Wt1", "Bnc1", "Myh11", "Tagln", "Acta2", "Cd3d", "Cd3e", "Cd8a", "Igkc", "Cr2", "Cadm2", "Plp1", "Dlgap1")
+
+p0 <- DotPlot(prot_subset, features = dmarkers, group.by = "seurat_clusters", cols = c("blue", "red"))+RotatedAxis()+coord_flip()
+
+
+prot_subset_renameIdent <- prot_subset
+prot_subset_renameIdent <- RenameIdents(prot_subset_renameIdent, "1"= "Cardiomyocytes","2"= "Cardiomyocytes","3"= "Cardiomyocytes","4"= "Cardiomyocytes","10"= "Cardiomyocytes","13"= "Cardiomyocytes","15"= "Cardiomyocytes","17"= "Cardiomyocytes","23"= "Cardiomyocytes","27"= "Cardiomyocytes","29"= "Cardiomyocytes",
+                                                                     "5"= "Endothelial" ,"7"= "Endothelial", "12"= "Endothelial", "21"= "Endothelial","26"= "Endothelial",
+                                                                     "0"= "Fibroblast", "8"= "Fibroblast" ,"11"= "Fibroblast", "14"= "Fibroblast", 
+                                                                     "6"= "Macrophage", "16"= "Macrophage" , "19"= "Macrophage" , 
+                                                                     "9"= "Pericytes","22"= "Pericytes","25"= "Pericytes",
+                                                                     "20"= "Epicardial", "28"= "SMC" , "18"= "Immune-cells","24"= "Immune-cells",
+                                                                     "30"= "Neuron")
+
+prot_subset_renameIdent$celltype <- Idents(prot_subset_renameIdent)
+prot_subset_renameIdent$celltype <- factor(prot_subset_renameIdent$celltype, levels = c("Cardiomyocytes", "Fibroblast","Endothelial", "Macrophage","VSM", "T-cell","B-cell" ,"Neuron"))
+p3 <- DimPlot(prot_subset_renameIdent, reduction = "wnn.umap", label = FALSE, repel = TRUE, raster = FALSE) + ggtitle("WNN")
+p4 <- DimPlot(prot_subset_renameIdent, reduction = "wnn.umap",  label = FALSE, repel = TRUE, raster = FALSE) + ggtitle("WNN")
+
+DefaultAssay(prot_subset_renameIdent) <- "RNA"
+p1 <- DotPlot(prot_subset_renameIdent, features = dmarkers, group.by = "celltype",cols = c("blue", "red"))+RotatedAxis()+coord_flip()
+
+
+DefaultAssay(prot_subset_renameIdent) <- "peaks"
+
+# first compute the GC content for each peak
+prot_subset_renameIdent <- RegionStats(prot_subset_renameIdent, genome = BSgenome.Mmusculus.UCSC.mm10)
+
+
+#Findmarker differently high in DFGC group
+DefaultAssay(prot_subset_renameIdent)<-"SCT"
+Idents(prot_subset_renameIdent) <- "group"
+sct_markers <-FindMarkers(prot_subset_renameIdent, `ident.1` = "DFGC")
+
+#Take the log2 fold change >0.5 in DFGC over other two methods
+DFCG_outperformRNA <- c("Gsn","Dcn", "Mgp", "Fkbp5", "Apoe", "Cfh", "App", "Pid1", "F13a1", "Trps1", "Frmd4b", "Rasal2", "Ccdc85a", "Stxbp6",
+                        "Man2a1", "Pten", "Sparc", "Plcl1", "Flt1", "Itm2b", "Gpc6", "Rbpj", "Akt3", "B2m", "Plcb4")
+
+p1 <- FeaturePlot(prot_subset_renameIdent, features = DFCG_outperformRNA, max.cutoff = 'q90',reduction = "wnn.umap", ncol = 5)
+
+p1 <- VlnPlot(object = prot_subset_renameIdent, features =DFCG_outperformRNA, pt.size = 0, ncol=5) 
+
+
+
+#Take the log2 fold change <-0.5 in DFGC over other two methods
+mito_genes <- c("Aifm1", "Atp5a1", "Atp5f1", "Bcs1l", "Immt", "Mfn1")
+
+p1 <- FeaturePlot(prot_subset_renameIdent, features = mito_genes, max.cutoff = 'q90',reduction = "wnn.umap", ncol = 3)
+Idents(prot_subset_renameIdent) <- "methods"
+p1 <- VlnPlot(object = prot_subset_renameIdent, features =mito_genes, pt.size = 0, ncol=3) 
+
+
+#Take the log2 fold change <-0.5 in DFGC over other two methods
+mito_genes <- c("Gm42418",
+                "mt-Co2",
+                "mt-Co3",
+                "mt-Atp6",
+                "mt-Co1",
+                "mt-Nd1",
+                "Lars2",
+                "mt-Cytb",
+                "mt-Nd4",
+                "mt-Nd2",
+                "Cmss1",
+                "mt-Nd3",
+                "mt-Nd5",
+                "Gm19951"
+                
+)
+
+p1 <- FeaturePlot(prot_subset_renameIdent, features = mito_genes, max.cutoff = 'q90',reduction = "wnn.umap", ncol = 4)
+Idents(prot_subset_renameIdent) <- "methods"
+p1 <- VlnPlot(object = prot_subset_renameIdent, features =mito_genes, pt.size = 0, ncol=4) 
+
+
+#visulize genes have similar expression in all three methods
+neural_genes <- c("Ivns1abp",
+                  "Wdfy3",
+                  "Kpna4",
+                  "Fchsd2",
+                  "Erbin",
+                  "Top1",
+                  "Klf9",
+                  "Nufip2",
+                  "Uvrag",
+                  "Rbms3",
+                  "Wasf2",
+                  "Magi3",
+                  "4930402H24Rik",
+                  "Nr3c2",
+                  "Wipf1",
+                  "Tsc22d2",
+                  "Zfhx3",
+                  "Xdh",
+                  "Arhgap31",
+                  "Mast2",
+                  "Hsp90b1",
+                  "Cdc42",
+                  "Tmod3",
+                  "Bcl2l1",
+                  "Rmdn1",
+                  "Aplp2",
+                  "Spred1",
+                  "Rtn4",
+                  "Oxct1",
+                  "Pld1")
+
+p1 <- FeaturePlot(prot_subset_renameIdent, features = neural_genes, max.cutoff = 'q90',reduction = "wnn.umap", ncol = 6)
+Idents(prot_subset_renameIdent) <- "methods"
+p1 <- VlnPlot(object = prot_subset_renameIdent, features =neural_genes, pt.size = 0, ncol=4) 
+
+#some cardiac markers
+cardiac_genes <- c("Msi2", "Large1", "Adk", "Ralgapa2", "Chchd3", "Samd4", "Tbc1d5","Ivns1abp","Magi3")
+p1 <- FeaturePlot(prot_subset_renameIdent, features = cardiac_genes, max.cutoff = 'q90',reduction = "wnn.umap", ncol = 3)
+Idents(prot_subset_renameIdent) <- "methods"
+p1 <- VlnPlot(object = prot_subset_renameIdent, features =cardiac_genes, pt.size = 0, ncol=3) 
+
+
+
+#Motif analysis with signac and TF linkage
+library(JASPAR2020)
+library(TFBSTools)
+library(motifmatchr)
+pfm <- getMatrixSet(
+  x = JASPAR2020,
+  opts = list(collection = "CORE", tax_group = 'vertebrates', all_versions = FALSE)
+)
+DefaultAssay(prot_subset_renameIdent) <- "RNA"
+
+DefaultAssay(prot_subset_renameIdent) <- "peaks"
+
+prot_subset_renameIdent<- AddMotifs(
+  object = prot_subset_renameIdent,
+  genome = BSgenome.Mmusculus.UCSC.mm10,
+  pfm = pfm
+)
+
+library(chromVAR)
+prot_subset_renameIdent <- RunChromVAR(
+  object = prot_subset_renameIdent,
+  genome = BSgenome.Mmusculus.UCSC.mm10
+)
+
+#Identify significant peaks in DFGC group compared to other two groups
+Idents(prot_subset_renameIdent) <- "group"
+peaks_markers <-FindMarkers(prot_subset_renameIdent, "ident.1" = "DFGC")
+
+# link peaks to genes
+install.packages('qlcMatrix')
+library(qlcMatrix)
+
+Idents(prot_subset_renameIdent) <- "methods"
+
+DefaultAssay(prot_subset_renameIdent)<-'peaks'
+prot_subset_renameIdent <- LinkPeaks(
+  object = prot_subset_renameIdent,
+  peak.assay = "peaks",
+  expression.assay = "SCT",
+  genes.use  = c("Qk",
+                 "Ston1",
+                 "Vim",
+                 "Tcf4",
+                 "Pxdc1",
+                 "Anxa2",
+                 "Ezh1",
+                 "Tagln2",
+                 "Terf1",
+                 "Ifitm2",
+                 "Tpcn2",
+                 "Emp1",
+                 "Mdm1",
+                 "6030445D17Rik",
+                 "Ppp1r18",
+                 "Trim47",
+                 "Ccdc63",
+                 "Athl1",
+                 "Elk3",
+                 "Cntln",
+                 "Spaca6"
+  ))
+
+Idents(prot_subset_renameIdent) <- "methods"
+p1 <- CoveragePlot(
+  object = prot_subset_renameIdent,
+  region = "Vim",
+  features = "Vim",
+  expression.assay = "SCT",
+  extend.upstream = 500,
+  extend.downstream = 10000
+)
+
+Idents(prot_subset_renameIdent) <- "group"
+p1 <- CoveragePlot(
+  object = prot_subset_renameIdent,
+  region = "Vim",
+  features = "Vim",
+  expression.assay = "SCT",
+  extend.upstream = 500,
+  extend.downstream = 10000
+)
+
+
+
+Idents(prot_subset_renameIdent) <- "group"
+
+DefaultAssay(prot_subset_renameIdent)<-"chromvar"
+motif_markers<-FindAllMarkers(prot_subset_renameIdent, only.pos = T)
+install.packages('ggseqlogo')
+library(ggseqlogo)
+p1 <- MotifPlot(
+  object = prot_subset_renameIdent,
+  motifs = head(rownames(motif_markers), n = 25),
+  assay = 'peaks'
+)
+
+
+#obtain the median stats reports from metadata
+install.packages("scCustomize")
+library(scCustomize)
+
+prot_stat <- Median_Stats(prot,
+                          group_by_var = "methods",
+                          default_var = FALSE,
+                          median_var = c("nCount_RNA","nFeature_RNA", "nCount_ATAC", "nFeature_ATAC","percent.mt", "nucleosome_signal", "nucleosome_percentile","TSS.enrichment","TSS.percentile" )
+)
+
+view(prot_subset_renameIdent@meta.data)
+
+prot_reident_stat <- Median_Stats(prot_subset_renameIdent,
+                                  group_by_var = "methods",
+                                  default_var = FALSE,
+                                  median_var = c("nCount_RNA","nFeature_RNA", "nCount_ATAC", "nFeature_ATAC", "nucleosome_signal", "nucleosome_percentile","TSS.enrichment","TSS.percentile", "nCount_SCT", "nFeature_SCT", "nCount_peaks", "nFeature_peaks")
+)
+
+
